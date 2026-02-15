@@ -43,17 +43,49 @@ func Validate(cfg *models.Config) error {
 }
 
 func validateMediaEntry(tagID string, entry models.MediaEntry) error {
-	if entry.Path == "" {
-		return fmt.Errorf("media[%s]: path is required", tagID)
-	}
 	if entry.Title == "" {
 		return fmt.Errorf("media[%s]: title is required", tagID)
 	}
+
 	validTypes := map[string]bool{
-		"movie": true, "episode": true, "music": true, "audiobook": true,
+		"movie": true, "episode": true, "music": true, "audiobook": true, "series": true,
 	}
 	if entry.Type != "" && !validTypes[entry.Type] {
-		return fmt.Errorf("media[%s]: invalid type %q (must be movie, episode, music, or audiobook)", tagID, entry.Type)
+		return fmt.Errorf("media[%s]: invalid type %q (must be movie, episode, music, audiobook, or series)", tagID, entry.Type)
+	}
+
+	if entry.Type == "series" {
+		return validateSeriesEntry(tagID, entry)
+	}
+
+	// Non-series entries require a path.
+	if entry.Path == "" {
+		return fmt.Errorf("media[%s]: path is required", tagID)
+	}
+	return nil
+}
+
+func validateSeriesEntry(tagID string, entry models.MediaEntry) error {
+	if len(entry.Episodes) == 0 {
+		return fmt.Errorf("media[%s]: series must have at least one episode", tagID)
+	}
+
+	seen := make(map[string]bool)
+	for i, ep := range entry.Episodes {
+		if ep.Path == "" {
+			return fmt.Errorf("media[%s].episodes[%d]: path is required", tagID, i)
+		}
+		if ep.Season <= 0 {
+			return fmt.Errorf("media[%s].episodes[%d]: season must be > 0", tagID, i)
+		}
+		if ep.Episode <= 0 {
+			return fmt.Errorf("media[%s].episodes[%d]: episode must be > 0", tagID, i)
+		}
+		key := fmt.Sprintf("S%02dE%02d", ep.Season, ep.Episode)
+		if seen[key] {
+			return fmt.Errorf("media[%s].episodes[%d]: duplicate episode %s", tagID, i, key)
+		}
+		seen[key] = true
 	}
 	return nil
 }

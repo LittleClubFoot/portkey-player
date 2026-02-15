@@ -195,3 +195,123 @@ func TestValidate_NASShareMissingMountPoint(t *testing.T) {
 		t.Fatal("expected error for missing NAS mount point")
 	}
 }
+
+// --- Series validation tests ---
+
+func TestValidate_SeriesValid(t *testing.T) {
+	cfg := validConfig()
+	cfg.Media["2001"] = models.MediaEntry{
+		Title: "Peppa Pig",
+		Type:  "series",
+		Episodes: []models.EpisodeEntry{
+			{Season: 1, Episode: 1, Path: "/media/s01e01.mp4"},
+			{Season: 1, Episode: 2, Path: "/media/s01e02.mp4"},
+		},
+	}
+	if err := Validate(cfg); err != nil {
+		t.Errorf("expected no error for valid series, got: %v", err)
+	}
+}
+
+func TestValidate_SeriesNoEpisodes(t *testing.T) {
+	cfg := validConfig()
+	cfg.Media["2001"] = models.MediaEntry{
+		Title:    "Empty Show",
+		Type:     "series",
+		Episodes: []models.EpisodeEntry{},
+	}
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected error for series with no episodes")
+	}
+}
+
+func TestValidate_SeriesEpisodeMissingPath(t *testing.T) {
+	cfg := validConfig()
+	cfg.Media["2001"] = models.MediaEntry{
+		Title: "Show",
+		Type:  "series",
+		Episodes: []models.EpisodeEntry{
+			{Season: 1, Episode: 1, Path: ""},
+		},
+	}
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected error for episode missing path")
+	}
+}
+
+func TestValidate_SeriesEpisodeInvalidSeason(t *testing.T) {
+	cfg := validConfig()
+	cfg.Media["2001"] = models.MediaEntry{
+		Title: "Show",
+		Type:  "series",
+		Episodes: []models.EpisodeEntry{
+			{Season: 0, Episode: 1, Path: "/test.mp4"},
+		},
+	}
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected error for season <= 0")
+	}
+}
+
+func TestValidate_SeriesEpisodeInvalidEpisode(t *testing.T) {
+	cfg := validConfig()
+	cfg.Media["2001"] = models.MediaEntry{
+		Title: "Show",
+		Type:  "series",
+		Episodes: []models.EpisodeEntry{
+			{Season: 1, Episode: 0, Path: "/test.mp4"},
+		},
+	}
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected error for episode <= 0")
+	}
+}
+
+func TestValidate_SeriesDuplicateEpisode(t *testing.T) {
+	cfg := validConfig()
+	cfg.Media["2001"] = models.MediaEntry{
+		Title: "Show",
+		Type:  "series",
+		Episodes: []models.EpisodeEntry{
+			{Season: 1, Episode: 1, Path: "/a.mp4"},
+			{Season: 1, Episode: 1, Path: "/b.mp4"},
+		},
+	}
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected error for duplicate episode")
+	}
+}
+
+func TestValidate_SeriesTypeAccepted(t *testing.T) {
+	cfg := validConfig()
+	cfg.Media["2001"] = models.MediaEntry{
+		Title: "Show",
+		Type:  "series",
+		Episodes: []models.EpisodeEntry{
+			{Season: 1, Episode: 1, Path: "/test.mp4"},
+		},
+	}
+	if err := Validate(cfg); err != nil {
+		t.Errorf("series type should be accepted, got: %v", err)
+	}
+}
+
+func TestValidate_SeriesNoPathRequired(t *testing.T) {
+	cfg := validConfig()
+	// Series entries don't need a top-level path.
+	cfg.Media["2001"] = models.MediaEntry{
+		Title: "Show",
+		Type:  "series",
+		Episodes: []models.EpisodeEntry{
+			{Season: 1, Episode: 1, Path: "/test.mp4"},
+		},
+	}
+	if err := Validate(cfg); err != nil {
+		t.Errorf("series should not require top-level path, got: %v", err)
+	}
+}

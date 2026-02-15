@@ -14,3 +14,9 @@ type Repository interface {
 	RecordPlay(tagID string, timestamp time.Time) error
 	Close() error
 }
+
+// ProgressRepository defines persistence for series viewing progress.
+type ProgressRepository interface {
+	GetProgress(tagID string) (*models.SeriesProgress, error)
+	SaveProgress(progress *models.SeriesProgress) error
+}

@@ -43,6 +43,14 @@ func migrate(db *sql.DB) error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_events_start ON playback_events(start_time);
 	CREATE INDEX IF NOT EXISTS idx_events_tag   ON playback_events(tag_id);
+
+	CREATE TABLE IF NOT EXISTS series_progress (
+		tag_id           TEXT PRIMARY KEY,
+		current_season   INTEGER NOT NULL DEFAULT 1,
+		current_episode  INTEGER NOT NULL DEFAULT 1,
+		position_seconds INTEGER NOT NULL DEFAULT 0,
+		completed        INTEGER NOT NULL DEFAULT 0
+	);
 	`
 	_, err := db.Exec(schema)
 	return err
@@ -114,6 +122,47 @@ func (r *SQLiteRepository) RecordPlay(tagID string, timestamp time.Time) error {
 	)
 	if err != nil {
 		return fmt.Errorf("recording play: %w", err)
+	}
+	return nil
+}
+
+// GetProgress returns the viewing progress for a series tag, or nil if none exists.
+func (r *SQLiteRepository) GetProgress(tagID string) (*models.SeriesProgress, error) {
+	var p models.SeriesProgress
+	var completed int
+	err := r.db.QueryRow(
+		`SELECT tag_id, current_season, current_episode, position_seconds, completed
+		 FROM series_progress WHERE tag_id = ?`, tagID,
+	).Scan(&p.TagID, &p.CurrentSeason, &p.CurrentEpisode, &p.PositionSeconds, &completed)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting series progress for %s: %w", tagID, err)
+	}
+	p.Completed = completed != 0
+	return &p, nil
+}
+
+// SaveProgress upserts the viewing progress for a series tag.
+func (r *SQLiteRepository) SaveProgress(progress *models.SeriesProgress) error {
+	completed := 0
+	if progress.Completed {
+		completed = 1
+	}
+	_, err := r.db.Exec(
+		`INSERT INTO series_progress (tag_id, current_season, current_episode, position_seconds, completed)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(tag_id) DO UPDATE SET
+		   current_season = excluded.current_season,
+		   current_episode = excluded.current_episode,
+		   position_seconds = excluded.position_seconds,
+		   completed = excluded.completed`,
+		progress.TagID, progress.CurrentSeason, progress.CurrentEpisode,
+		progress.PositionSeconds, completed,
+	)
+	if err != nil {
+		return fmt.Errorf("saving series progress for %s: %w", progress.TagID, err)
 	}
 	return nil
 }

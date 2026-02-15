@@ -9,16 +9,28 @@ type Config struct {
 	Hardware HardwareConfig  `json:"hardware"`
 }
 
-// MediaEntry represents a single media item mapped to a tag ID.
+// MediaEntry represents a single media item or a series mapped to a tag ID.
+// When Type is "series", the Episodes field contains ordered episode data
+// and Path/Duration on the entry itself are ignored.
 type MediaEntry struct {
-	Path      string            `json:"path"`
+	Path      string            `json:"path,omitempty"`
 	Title     string            `json:"title"`
-	Duration  int               `json:"duration"` // minutes
-	Type      string            `json:"type"`     // "movie", "episode", "music", "audiobook"
+	Duration  int               `json:"duration,omitempty"` // minutes
+	Type      string            `json:"type"`               // "movie", "episode", "music", "audiobook", "series"
 	AgeRating string            `json:"age_rating,omitempty"`
 	Season    int               `json:"season,omitempty"`
 	Episode   int               `json:"episode,omitempty"`
+	Episodes  []EpisodeEntry    `json:"episodes,omitempty"`
 	Metadata  map[string]any    `json:"metadata,omitempty"`
+}
+
+// EpisodeEntry represents a single episode within a series.
+type EpisodeEntry struct {
+	Season   int    `json:"season"`
+	Episode  int    `json:"episode"`
+	Path     string `json:"path"`
+	Title    string `json:"title"`
+	Duration int    `json:"duration,omitempty"` // minutes
 }
 
 // RulesConfig defines parental control rules.
@@ -58,11 +70,14 @@ type HardwareConfig struct {
 }
 
 // ButtonPins maps button functions to GPIO pin numbers.
+// NextEpisode and PrevEpisode are optional and only used for series playback.
 type ButtonPins struct {
-	PlayPause  int `json:"play_pause"`
-	Stop       int `json:"stop"`
-	Rewind     int `json:"rewind"`
-	Forward    int `json:"forward"`
-	VolumeUp   int `json:"volume_up"`
-	VolumeDown int `json:"volume_down"`
+	PlayPause   int `json:"play_pause"`
+	Stop        int `json:"stop"`
+	Rewind      int `json:"rewind"`
+	Forward     int `json:"forward"`
+	VolumeUp    int `json:"volume_up"`
+	VolumeDown  int `json:"volume_down"`
+	NextEpisode int `json:"next_episode,omitempty"`
+	PrevEpisode int `json:"prev_episode,omitempty"`
 }

@@ -189,3 +189,114 @@ func TestSQLiteRepository_MultipleEvents(t *testing.T) {
 		t.Errorf("expected 5 events, got %d", len(events))
 	}
 }
+
+// --- Series progress tests ---
+
+func TestSQLiteRepository_GetProgress_NoProgress(t *testing.T) {
+	repo := setupTestDB(t)
+
+	progress, err := repo.GetProgress("2001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if progress != nil {
+		t.Error("expected nil progress for new series")
+	}
+}
+
+func TestSQLiteRepository_SaveAndGetProgress(t *testing.T) {
+	repo := setupTestDB(t)
+
+	p := &models.SeriesProgress{
+		TagID:           "2001",
+		CurrentSeason:   1,
+		CurrentEpisode:  3,
+		PositionSeconds: 120,
+		Completed:       false,
+	}
+	if err := repo.SaveProgress(p); err != nil {
+		t.Fatalf("failed to save progress: %v", err)
+	}
+
+	got, err := repo.GetProgress("2001")
+	if err != nil {
+		t.Fatalf("failed to get progress: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected non-nil progress")
+	}
+	if got.CurrentSeason != 1 {
+		t.Errorf("expected season 1, got %d", got.CurrentSeason)
+	}
+	if got.CurrentEpisode != 3 {
+		t.Errorf("expected episode 3, got %d", got.CurrentEpisode)
+	}
+	if got.PositionSeconds != 120 {
+		t.Errorf("expected position 120, got %d", got.PositionSeconds)
+	}
+	if got.Completed {
+		t.Error("expected not completed")
+	}
+}
+
+func TestSQLiteRepository_SaveProgress_Upsert(t *testing.T) {
+	repo := setupTestDB(t)
+
+	// Save initial progress.
+	repo.SaveProgress(&models.SeriesProgress{
+		TagID: "2001", CurrentSeason: 1, CurrentEpisode: 1, PositionSeconds: 60,
+	})
+
+	// Update progress.
+	repo.SaveProgress(&models.SeriesProgress{
+		TagID: "2001", CurrentSeason: 1, CurrentEpisode: 2, PositionSeconds: 0, Completed: false,
+	})
+
+	got, err := repo.GetProgress("2001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.CurrentEpisode != 2 {
+		t.Errorf("expected episode 2 after upsert, got %d", got.CurrentEpisode)
+	}
+	if got.PositionSeconds != 0 {
+		t.Errorf("expected position 0 after upsert, got %d", got.PositionSeconds)
+	}
+}
+
+func TestSQLiteRepository_SaveProgress_Completed(t *testing.T) {
+	repo := setupTestDB(t)
+
+	repo.SaveProgress(&models.SeriesProgress{
+		TagID: "2001", CurrentSeason: 2, CurrentEpisode: 5, Completed: true,
+	})
+
+	got, err := repo.GetProgress("2001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !got.Completed {
+		t.Error("expected completed to be true")
+	}
+}
+
+func TestSQLiteRepository_SaveProgress_MultiSeries(t *testing.T) {
+	repo := setupTestDB(t)
+
+	repo.SaveProgress(&models.SeriesProgress{
+		TagID: "2001", CurrentSeason: 1, CurrentEpisode: 1,
+	})
+	repo.SaveProgress(&models.SeriesProgress{
+		TagID: "2002", CurrentSeason: 3, CurrentEpisode: 5,
+	})
+
+	p1, _ := repo.GetProgress("2001")
+	p2, _ := repo.GetProgress("2002")
+
+	if p1.CurrentEpisode != 1 {
+		t.Errorf("expected episode 1 for 2001, got %d", p1.CurrentEpisode)
+	}
+	if p2.CurrentSeason != 3 || p2.CurrentEpisode != 5 {
+		t.Errorf("expected S03E05 for 2002, got S%02dE%02d", p2.CurrentSeason, p2.CurrentEpisode)
+	}
+}

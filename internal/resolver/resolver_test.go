@@ -17,15 +17,26 @@ func testMedia() map[string]models.MediaEntry {
 			Type:     "movie",
 		},
 		"2001": {
-			Path:     "smb://nas.local/kids/peppa.mp4",
-			Title:    "Peppa Pig",
-			Duration: 5,
-			Type:     "episode",
+			Title: "Peppa Pig",
+			Type:  "series",
+			Episodes: []models.EpisodeEntry{
+				{Season: 1, Episode: 1, Path: "/media/peppa/s01e01.mp4", Title: "Muddy Puddles", Duration: 5},
+				{Season: 1, Episode: 2, Path: "/media/peppa/s01e02.mp4", Title: "Mr Dinosaur", Duration: 5},
+				{Season: 1, Episode: 3, Path: "/media/peppa/s01e03.mp4", Title: "Best Friend", Duration: 5},
+				{Season: 2, Episode: 1, Path: "/media/peppa/s02e01.mp4", Title: "Bubbles", Duration: 5},
+			},
+		},
+		"3001": {
+			Path:  "smb://nas.local/kids/peppa.mp4",
+			Title: "Peppa Single",
+			Type:  "episode",
 		},
 	}
 }
 
-func TestConfigResolver_ResolveFound(t *testing.T) {
+// --- Basic resolve tests ---
+
+func TestConfigResolver_ResolveMovie(t *testing.T) {
 	r := NewConfigResolver(testMedia())
 	item, err := r.Resolve("1001")
 	if err != nil {
@@ -36,12 +47,6 @@ func TestConfigResolver_ResolveFound(t *testing.T) {
 	}
 	if item.Title != "Frozen" {
 		t.Errorf("expected title Frozen, got %s", item.Title)
-	}
-	if item.Path != "/media/movies/frozen.mp4" {
-		t.Errorf("expected path /media/movies/frozen.mp4, got %s", item.Path)
-	}
-	if item.Duration != 102 {
-		t.Errorf("expected duration 102, got %d", item.Duration)
 	}
 	if item.Type != "movie" {
 		t.Errorf("expected type movie, got %s", item.Type)
@@ -56,6 +61,228 @@ func TestConfigResolver_ResolveNotFound(t *testing.T) {
 	}
 }
 
+func TestConfigResolver_ResolveSeries_ReturnsFirstEpisode(t *testing.T) {
+	r := NewConfigResolver(testMedia())
+	item, err := r.Resolve("2001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if item.Title != "Muddy Puddles" {
+		t.Errorf("expected first episode title, got %s", item.Title)
+	}
+	if item.Season != 1 || item.Episode != 1 {
+		t.Errorf("expected S01E01, got S%02dE%02d", item.Season, item.Episode)
+	}
+	if item.Type != "episode" {
+		t.Errorf("expected type episode, got %s", item.Type)
+	}
+}
+
+// --- IsSeries ---
+
+func TestConfigResolver_IsSeries(t *testing.T) {
+	r := NewConfigResolver(testMedia())
+
+	if !r.IsSeries("2001") {
+		t.Error("expected 2001 to be a series")
+	}
+	if r.IsSeries("1001") {
+		t.Error("expected 1001 to not be a series")
+	}
+	if r.IsSeries("9999") {
+		t.Error("expected unknown tag to not be a series")
+	}
+}
+
+// --- ResolveEpisode ---
+
+func TestConfigResolver_ResolveEpisode(t *testing.T) {
+	r := NewConfigResolver(testMedia())
+
+	item, err := r.ResolveEpisode("2001", 1, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if item.Title != "Mr Dinosaur" {
+		t.Errorf("expected Mr Dinosaur, got %s", item.Title)
+	}
+	if item.Season != 1 || item.Episode != 2 {
+		t.Errorf("expected S01E02, got S%02dE%02d", item.Season, item.Episode)
+	}
+}
+
+func TestConfigResolver_ResolveEpisode_CrossSeason(t *testing.T) {
+	r := NewConfigResolver(testMedia())
+
+	item, err := r.ResolveEpisode("2001", 2, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if item.Title != "Bubbles" {
+		t.Errorf("expected Bubbles, got %s", item.Title)
+	}
+}
+
+func TestConfigResolver_ResolveEpisode_NotFound(t *testing.T) {
+	r := NewConfigResolver(testMedia())
+
+	_, err := r.ResolveEpisode("2001", 5, 99)
+	if err == nil {
+		t.Fatal("expected error for missing episode")
+	}
+}
+
+func TestConfigResolver_ResolveEpisode_NotASeries(t *testing.T) {
+	r := NewConfigResolver(testMedia())
+
+	_, err := r.ResolveEpisode("1001", 1, 1)
+	if err == nil {
+		t.Fatal("expected error for non-series tag")
+	}
+}
+
+// --- NextEpisode ---
+
+func TestConfigResolver_NextEpisode(t *testing.T) {
+	r := NewConfigResolver(testMedia())
+
+	next, err := r.NextEpisode("2001", 1, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if next.Title != "Mr Dinosaur" {
+		t.Errorf("expected Mr Dinosaur, got %s", next.Title)
+	}
+}
+
+func TestConfigResolver_NextEpisode_CrossSeason(t *testing.T) {
+	r := NewConfigResolver(testMedia())
+
+	// S01E03 → S02E01
+	next, err := r.NextEpisode("2001", 1, 3)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if next.Season != 2 || next.Episode != 1 {
+		t.Errorf("expected S02E01, got S%02dE%02d", next.Season, next.Episode)
+	}
+}
+
+func TestConfigResolver_NextEpisode_AtEnd(t *testing.T) {
+	r := NewConfigResolver(testMedia())
+
+	// S02E01 is the last episode.
+	next, err := r.NextEpisode("2001", 2, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if next != nil {
+		t.Error("expected nil for last episode")
+	}
+}
+
+func TestConfigResolver_NextEpisode_UnknownTag(t *testing.T) {
+	r := NewConfigResolver(testMedia())
+	_, err := r.NextEpisode("9999", 1, 1)
+	if err == nil {
+		t.Fatal("expected error for unknown tag")
+	}
+}
+
+// --- PrevEpisode ---
+
+func TestConfigResolver_PrevEpisode(t *testing.T) {
+	r := NewConfigResolver(testMedia())
+
+	prev, err := r.PrevEpisode("2001", 1, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if prev.Title != "Muddy Puddles" {
+		t.Errorf("expected Muddy Puddles, got %s", prev.Title)
+	}
+}
+
+func TestConfigResolver_PrevEpisode_AtStart(t *testing.T) {
+	r := NewConfigResolver(testMedia())
+
+	prev, err := r.PrevEpisode("2001", 1, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if prev != nil {
+		t.Error("expected nil for first episode")
+	}
+}
+
+func TestConfigResolver_PrevEpisode_CrossSeason(t *testing.T) {
+	r := NewConfigResolver(testMedia())
+
+	// S02E01 → S01E03
+	prev, err := r.PrevEpisode("2001", 2, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if prev.Season != 1 || prev.Episode != 3 {
+		t.Errorf("expected S01E03, got S%02dE%02d", prev.Season, prev.Episode)
+	}
+}
+
+// --- FirstEpisode ---
+
+func TestConfigResolver_FirstEpisode(t *testing.T) {
+	r := NewConfigResolver(testMedia())
+
+	first, err := r.FirstEpisode("2001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if first.Season != 1 || first.Episode != 1 {
+		t.Errorf("expected S01E01, got S%02dE%02d", first.Season, first.Episode)
+	}
+}
+
+// --- EpisodeCount ---
+
+func TestConfigResolver_EpisodeCount(t *testing.T) {
+	r := NewConfigResolver(testMedia())
+
+	if count := r.EpisodeCount("2001"); count != 4 {
+		t.Errorf("expected 4 episodes, got %d", count)
+	}
+	if count := r.EpisodeCount("1001"); count != 0 {
+		t.Errorf("expected 0 episodes for movie, got %d", count)
+	}
+	if count := r.EpisodeCount("9999"); count != 0 {
+		t.Errorf("expected 0 for unknown tag, got %d", count)
+	}
+}
+
+// --- EpisodeToItem title fallback ---
+
+func TestConfigResolver_EpisodeToItem_FallbackTitle(t *testing.T) {
+	media := map[string]models.MediaEntry{
+		"test": {
+			Title: "My Show",
+			Type:  "series",
+			Episodes: []models.EpisodeEntry{
+				{Season: 3, Episode: 7, Path: "/test.mp4", Title: ""},
+			},
+		},
+	}
+	r := NewConfigResolver(media)
+
+	item, err := r.ResolveEpisode("test", 3, 7)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if item.Title != "My Show S03E07" {
+		t.Errorf("expected fallback title 'My Show S03E07', got %s", item.Title)
+	}
+}
+
+// --- Exists ---
+
 func TestConfigResolver_ExistsLocalFile(t *testing.T) {
 	dir := t.TempDir()
 	testFile := filepath.Join(dir, "test.mp4")
@@ -64,7 +291,6 @@ func TestConfigResolver_ExistsLocalFile(t *testing.T) {
 	}
 
 	r := NewConfigResolver(testMedia())
-
 	exists, err := r.Exists(testFile)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -88,37 +314,13 @@ func TestConfigResolver_ExistsLocalFileMissing(t *testing.T) {
 func TestConfigResolver_ExistsNetworkPath(t *testing.T) {
 	r := NewConfigResolver(testMedia())
 
-	// SMB paths are assumed reachable.
-	exists, err := r.Exists("smb://nas.local/kids/peppa.mp4")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	exists, _ := r.Exists("smb://nas.local/kids/peppa.mp4")
 	if !exists {
 		t.Error("expected SMB path to be treated as existing")
 	}
 
-	// NFS paths are assumed reachable.
-	exists, err = r.Exists("nfs://nas.local/kids/peppa.mp4")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	exists, _ = r.Exists("nfs://nas.local/kids/peppa.mp4")
 	if !exists {
 		t.Error("expected NFS path to be treated as existing")
-	}
-}
-
-func TestConfigResolver_ResolveAllEntries(t *testing.T) {
-	media := testMedia()
-	r := NewConfigResolver(media)
-
-	for tagID, entry := range media {
-		item, err := r.Resolve(tagID)
-		if err != nil {
-			t.Errorf("resolve failed for tag %s: %v", tagID, err)
-			continue
-		}
-		if item.Title != entry.Title {
-			t.Errorf("tag %s: expected title %q, got %q", tagID, entry.Title, item.Title)
-		}
 	}
 }

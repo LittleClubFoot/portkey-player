@@ -20,12 +20,26 @@
       "age_rating": "PG"
     },
     "2001": {
-      "path": "smb://nas.local/kids/peppa/s01e01.mp4",
-      "title": "Peppa Pig S01E01",
-      "duration": 5,
-      "type": "episode",
-      "season": 1,
-      "episode": 1
+      "title": "Peppa Pig",
+      "type": "series",
+      "episodes": [
+        {"season": 1, "episode": 1, "path": "/media/peppa/s01e01.mp4", "title": "Muddy Puddles", "duration": 5},
+        {"season": 1, "episode": 2, "path": "/media/peppa/s01e02.mp4", "title": "Mr Dinosaur is Lost", "duration": 5},
+        {"season": 1, "episode": 3, "path": "/media/peppa/s01e03.mp4", "title": "Best Friend", "duration": 5},
+        {"season": 1, "episode": 4, "path": "/media/peppa/s01e04.mp4", "title": "Polly Parrot", "duration": 5},
+        {"season": 1, "episode": 5, "path": "/media/peppa/s01e05.mp4", "title": "Hide and Seek", "duration": 5},
+        {"season": 2, "episode": 1, "path": "/media/peppa/s02e01.mp4", "title": "Bubbles", "duration": 5},
+        {"season": 2, "episode": 2, "path": "/media/peppa/s02e02.mp4", "title": "Emily Elephant", "duration": 5}
+      ]
+    },
+    "2002": {
+      "title": "Bluey",
+      "type": "series",
+      "episodes": [
+        {"season": 1, "episode": 1, "path": "smb://nas.local/kids/bluey/s01e01.mp4", "title": "Magic Xylophone", "duration": 7},
+        {"season": 1, "episode": 2, "path": "smb://nas.local/kids/bluey/s01e02.mp4", "title": "Hospital", "duration": 7},
+        {"season": 1, "episode": 3, "path": "smb://nas.local/kids/bluey/s01e03.mp4", "title": "Bike", "duration": 7}
+      ]
     },
     "3001": {
       "path": "/media/music/lullaby.mp3",
@@ -68,7 +82,9 @@
       "rewind": 22,
       "forward": 23,
       "volume_up": 24,
-      "volume_down": 25
+      "volume_down": 25,
+      "next_episode": 5,
+      "prev_episode": 6
     },
     "player": "mpv",
     "player_args": ["--fullscreen", "--no-osd-bar", "--really-quiet"]

@@ -17,13 +17,15 @@ type PlaybackEvent struct {
 type InputEventType int
 
 const (
-	InputScan       InputEventType = iota // RFID/QR tag scanned
-	InputPlayPause                        // Play/Pause button pressed
-	InputStop                             // Stop button pressed
-	InputRewind                           // Rewind button pressed
-	InputForward                          // Forward button pressed
-	InputVolumeUp                         // Volume up button pressed
-	InputVolumeDown                       // Volume down button pressed
+	InputScan        InputEventType = iota // RFID/QR tag scanned
+	InputPlayPause                         // Play/Pause button pressed
+	InputStop                              // Stop button pressed
+	InputRewind                            // Rewind button pressed
+	InputForward                           // Forward button pressed
+	InputVolumeUp                          // Volume up button pressed
+	InputVolumeDown                        // Volume down button pressed
+	InputNextEpisode                       // Next episode button pressed
+	InputPrevEpisode                       // Previous episode button pressed
 )
 
 func (t InputEventType) String() string {
@@ -42,6 +44,10 @@ func (t InputEventType) String() string {
 		return "volume_up"
 	case InputVolumeDown:
 		return "volume_down"
+	case InputNextEpisode:
+		return "next_episode"
+	case InputPrevEpisode:
+		return "prev_episode"
 	default:
 		return "unknown"
 	}
