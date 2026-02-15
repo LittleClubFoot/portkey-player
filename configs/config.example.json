@@ -1,0 +1,76 @@
+{
+  "version": "1.0",
+  "media": {
+    "1001": {
+      "path": "/media/movies/frozen.mp4",
+      "title": "Frozen",
+      "duration": 102,
+      "type": "movie",
+      "age_rating": "PG",
+      "metadata": {
+        "year": 2013,
+        "genres": ["Animation", "Family"]
+      }
+    },
+    "1002": {
+      "path": "/media/movies/moana.mp4",
+      "title": "Moana",
+      "duration": 107,
+      "type": "movie",
+      "age_rating": "PG"
+    },
+    "2001": {
+      "path": "smb://nas.local/kids/peppa/s01e01.mp4",
+      "title": "Peppa Pig S01E01",
+      "duration": 5,
+      "type": "episode",
+      "season": 1,
+      "episode": 1
+    },
+    "3001": {
+      "path": "/media/music/lullaby.mp3",
+      "title": "Bedtime Lullaby",
+      "duration": 30,
+      "type": "music"
+    },
+    "story1": {
+      "path": "/media/audiobooks/goodnight-moon.mp3",
+      "title": "Goodnight Moon",
+      "duration": 10,
+      "type": "audiobook"
+    }
+  },
+  "rules": {
+    "max_plays_per_day": 6,
+    "quiet_hours": {
+      "start": "20:00",
+      "end": "07:00"
+    },
+    "bedtime_only_after": "19:00",
+    "bedtime_tags": ["story1", "3001"]
+  },
+  "network": {
+    "nas_shares": [
+      {
+        "type": "smb",
+        "host": "nas.local",
+        "share": "kids",
+        "mount_point": "/mnt/nas/kids",
+        "username": "kidsplayer",
+        "password": ""
+      }
+    ]
+  },
+  "hardware": {
+    "buttons": {
+      "play_pause": 17,
+      "stop": 27,
+      "rewind": 22,
+      "forward": 23,
+      "volume_up": 24,
+      "volume_down": 25
+    },
+    "player": "mpv",
+    "player_args": ["--fullscreen", "--no-osd-bar", "--really-quiet"]
+  }
+}

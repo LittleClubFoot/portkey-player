@@ -1,0 +1,27 @@
+[Unit]
+Description=Kids Media Player
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/kidsmedia/kidsmedia --config /opt/kidsmedia/config.json --db /opt/kidsmedia/playback.db
+WorkingDirectory=/opt/kidsmedia
+Restart=on-failure
+RestartSec=5
+StandardInput=tty
+TTYPath=/dev/tty1
+User=root
+Environment=HOME=/root
+
+# Resource limits
+MemoryMax=256M
+CPUQuota=80%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kidsmedia
+
+[Install]
+WantedBy=multi-user.target
