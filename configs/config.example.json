@@ -83,6 +83,7 @@
       "forward": 23
     },
     "player": "mpv",
-    "player_args": ["--fullscreen", "--no-osd-bar", "--really-quiet"]
+    "player_args": ["--fullscreen", "--no-osd-bar", "--really-quiet"],
+    "idle_screen_path": "/opt/kidsmedia/idle.png"
   }
 }

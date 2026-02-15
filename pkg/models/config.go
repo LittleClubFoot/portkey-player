@@ -64,9 +64,10 @@ type NASShare struct {
 
 // HardwareConfig defines hardware pin mappings and player settings.
 type HardwareConfig struct {
-	Buttons    ButtonPins `json:"buttons"`
-	Player     string     `json:"player"`      // "mpv", "vlc", etc.
-	PlayerArgs []string   `json:"player_args,omitempty"`
+	Buttons       ButtonPins `json:"buttons"`
+	Player        string     `json:"player"`      // "mpv", "vlc", etc.
+	PlayerArgs    []string   `json:"player_args,omitempty"`
+	IdleScreenPath string   `json:"idle_screen_path,omitempty"` // path to idle screen image
 }
 
 // ButtonPins maps button functions to GPIO pin numbers.

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/LittleClubFoot/portkey-player/internal/config"
+	"github.com/LittleClubFoot/portkey-player/internal/idle"
 	"github.com/LittleClubFoot/portkey-player/internal/input"
 	"github.com/LittleClubFoot/portkey-player/internal/logger"
 	"github.com/LittleClubFoot/portkey-player/internal/player"
@@ -94,6 +95,18 @@ func run(log *slog.Logger, configPath, dbPath string) error {
 	mpv := player.NewMPVPlayer(cfg.Hardware.PlayerArgs, log)
 	ctrl := player.NewController(mpv, log)
 
+	// Generate and show idle screen if configured.
+	idleScreenPath := cfg.Hardware.IdleScreenPath
+	if idleScreenPath != "" {
+		if _, err := os.Stat(idleScreenPath); os.IsNotExist(err) {
+			log.Info("generating idle screen", "path", idleScreenPath)
+			if err := idle.GenerateScreen(idleScreenPath); err != nil {
+				log.Error("failed to generate idle screen", "error", err)
+				idleScreenPath = "" // disable idle screen on failure
+			}
+		}
+	}
+
 	// Set up context for graceful shutdown.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -114,6 +127,13 @@ func run(log *slog.Logger, configPath, dbPath string) error {
 	}
 	defer scanner.Close()
 
+	// Show idle screen on startup.
+	if idleScreenPath != "" {
+		if err := mpv.ShowIdleScreen(idleScreenPath); err != nil {
+			log.Error("failed to show idle screen", "error", err)
+		}
+	}
+
 	log.Info("ready - waiting for scan input")
 
 	// Main event loop.
@@ -121,6 +141,7 @@ func run(log *slog.Logger, configPath, dbPath string) error {
 		select {
 		case <-ctx.Done():
 			log.Info("shutting down")
+			mpv.HideIdleScreen()
 			mpv.Stop()
 			return nil
 
@@ -131,8 +152,18 @@ func run(log *slog.Logger, configPath, dbPath string) error {
 			}
 
 			if event.Type == models.InputScan {
+				// Hide idle screen before playback.
+				mpv.HideIdleScreen()
+
 				if err := handleScan(ctx, log, event, mediaResolver, ruleEngine, ctrl, mpv, eventRepo, cfg); err != nil {
 					log.Error("scan handling failed", "tag_id", event.Value, "error", err)
+				}
+
+				// Re-show idle screen after playback ends.
+				if idleScreenPath != "" {
+					if err := mpv.ShowIdleScreen(idleScreenPath); err != nil {
+						log.Error("failed to re-show idle screen", "error", err)
+					}
 				}
 			}
 		}

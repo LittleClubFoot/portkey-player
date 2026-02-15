@@ -18,6 +18,7 @@ type MPVPlayer struct {
 	cmd        *exec.Cmd
 	ipc        *IPCClient
 	playing    bool
+	idleCmd    *exec.Cmd // separate process for idle screen display
 	mu         sync.Mutex
 	logger     *slog.Logger
 }
@@ -210,6 +211,55 @@ func (m *MPVPlayer) ShowMessage(text string, durationMs int) error {
 		return fmt.Errorf("showing OSD message: %w", err)
 	}
 	return nil
+}
+
+// ShowIdleScreen displays a static image fullscreen using a separate mpv
+// process. It loops the image indefinitely until HideIdleScreen is called.
+func (m *MPVPlayer) ShowIdleScreen(imagePath string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.hideIdleLocked()
+
+	args := []string{
+		"--no-input-default-bindings",
+		"--no-osc",
+		"--no-osd-bar",
+		"--really-quiet",
+		"--loop=inf",
+		"--no-audio",
+		"--image-display-duration=inf",
+	}
+	args = append(args, m.args...)
+	args = append(args, imagePath)
+
+	m.idleCmd = exec.Command("mpv", args...)
+	m.idleCmd.Stdout = os.Stdout
+	m.idleCmd.Stderr = os.Stderr
+
+	if err := m.idleCmd.Start(); err != nil {
+		m.idleCmd = nil
+		return fmt.Errorf("starting idle screen: %w", err)
+	}
+
+	m.logger.Info("idle screen shown", "image", imagePath)
+	return nil
+}
+
+// HideIdleScreen terminates the idle screen process.
+func (m *MPVPlayer) HideIdleScreen() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.hideIdleLocked()
+}
+
+func (m *MPVPlayer) hideIdleLocked() {
+	if m.idleCmd != nil && m.idleCmd.Process != nil {
+		m.idleCmd.Process.Kill()
+		m.idleCmd.Wait()
+		m.idleCmd = nil
+		m.logger.Info("idle screen hidden")
+	}
 }
 
 // WaitForEnd blocks until the mpv process exits.
