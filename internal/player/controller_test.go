@@ -11,15 +11,17 @@ import (
 
 // mockPlayer is a test double for Player.
 type mockPlayer struct {
-	playing    bool
-	paused     bool
-	stopped    bool
-	position   float64
-	volume     int
-	seekDelta  int
-	playPath   string
-	waitCalled bool
-	err        error
+	playing      bool
+	paused       bool
+	stopped      bool
+	position     float64
+	volume       int
+	seekDelta    int
+	playPath     string
+	waitCalled   bool
+	lastMessage  string
+	lastMsgDurMs int
+	err          error
 }
 
 func (m *mockPlayer) Play(path string) error {
@@ -62,6 +64,11 @@ func (m *mockPlayer) GetPosition() (float64, error) {
 }
 func (m *mockPlayer) WaitForEnd() error {
 	m.waitCalled = true
+	return m.err
+}
+func (m *mockPlayer) ShowMessage(text string, durationMs int) error {
+	m.lastMessage = text
+	m.lastMsgDurMs = durationMs
 	return m.err
 }
 
@@ -188,39 +195,6 @@ func TestController_HandleSeek(t *testing.T) {
 	}
 }
 
-func TestController_HandleVolume(t *testing.T) {
-	mp := &mockPlayer{}
-	ctrl := NewController(mp, testControllerLogger())
-
-	item := &models.MediaItem{TagID: "1001", Path: "/test.mp4", Title: "Test"}
-	ctrl.StartPlayback(item)
-
-	ctrl.HandleInput(models.InputEvent{Type: models.InputVolumeUp})
-	if mp.volume != 105 {
-		t.Errorf("expected volume 105, got %d", mp.volume)
-	}
-
-	ctrl.HandleInput(models.InputEvent{Type: models.InputVolumeDown})
-	if mp.volume != 100 {
-		t.Errorf("expected volume 100, got %d", mp.volume)
-	}
-}
-
-func TestController_VolumeClamp(t *testing.T) {
-	mp := &mockPlayer{}
-	ctrl := NewController(mp, testControllerLogger())
-
-	item := &models.MediaItem{TagID: "1001", Path: "/test.mp4", Title: "Test"}
-	ctrl.StartPlayback(item)
-
-	for i := 0; i < 30; i++ {
-		ctrl.HandleInput(models.InputEvent{Type: models.InputVolumeDown})
-	}
-	if mp.volume < 0 {
-		t.Errorf("volume should not go below 0, got %d", mp.volume)
-	}
-}
-
 func TestController_Reset(t *testing.T) {
 	mp := &mockPlayer{}
 	ctrl := NewController(mp, testControllerLogger())
@@ -253,60 +227,7 @@ func TestController_PlaybackDuration_Idle(t *testing.T) {
 	}
 }
 
-// --- Series-specific controller tests ---
-
-func TestController_NextEpisode_WithSeriesTag(t *testing.T) {
-	mp := &mockPlayer{}
-	ctrl := NewController(mp, testControllerLogger())
-
-	item := &models.MediaItem{TagID: "2001", Path: "/test.mp4", Title: "Test", Season: 1, Episode: 1}
-	ctrl.StartPlayback(item)
-	ctrl.SetSeriesTag("2001")
-
-	action, err := ctrl.HandleInput(models.InputEvent{Type: models.InputNextEpisode})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if action != EpisodeNext {
-		t.Errorf("expected EpisodeNext, got %v", action)
-	}
-	if !mp.stopped {
-		t.Error("expected player to be stopped for episode switch")
-	}
-}
-
-func TestController_PrevEpisode_WithSeriesTag(t *testing.T) {
-	mp := &mockPlayer{}
-	ctrl := NewController(mp, testControllerLogger())
-
-	item := &models.MediaItem{TagID: "2001", Path: "/test.mp4", Title: "Test", Season: 1, Episode: 2}
-	ctrl.StartPlayback(item)
-	ctrl.SetSeriesTag("2001")
-
-	action, err := ctrl.HandleInput(models.InputEvent{Type: models.InputPrevEpisode})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if action != EpisodePrev {
-		t.Errorf("expected EpisodePrev, got %v", action)
-	}
-}
-
-func TestController_NextEpisode_WithoutSeriesTag(t *testing.T) {
-	mp := &mockPlayer{}
-	ctrl := NewController(mp, testControllerLogger())
-
-	item := &models.MediaItem{TagID: "1001", Path: "/test.mp4", Title: "Movie"}
-	ctrl.StartPlayback(item)
-
-	action, _ := ctrl.HandleInput(models.InputEvent{Type: models.InputNextEpisode})
-	if action != EpisodeNone {
-		t.Errorf("expected EpisodeNone for non-series, got %v", action)
-	}
-	if mp.stopped {
-		t.Error("should not stop player for non-series next episode")
-	}
-}
+// --- Series prompt tests ---
 
 func TestController_PromptState_Resume(t *testing.T) {
 	mp := &mockPlayer{}
@@ -366,14 +287,14 @@ func TestController_PromptState_IgnoresOtherButtons(t *testing.T) {
 
 	ctrl.EnterPromptState("2001")
 
-	// Volume and seek should be ignored during prompt.
-	action, _ := ctrl.HandleInput(models.InputEvent{Type: models.InputVolumeUp})
-	if action != EpisodeNone {
-		t.Errorf("expected EpisodeNone for volume during prompt, got %v", action)
-	}
-	action, _ = ctrl.HandleInput(models.InputEvent{Type: models.InputRewind})
+	// Seek buttons should be ignored during prompt.
+	action, _ := ctrl.HandleInput(models.InputEvent{Type: models.InputRewind})
 	if action != EpisodeNone {
 		t.Errorf("expected EpisodeNone for rewind during prompt, got %v", action)
+	}
+	action, _ = ctrl.HandleInput(models.InputEvent{Type: models.InputForward})
+	if action != EpisodeNone {
+		t.Errorf("expected EpisodeNone for forward during prompt, got %v", action)
 	}
 
 	// Should still be in prompting state.

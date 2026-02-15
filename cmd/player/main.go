@@ -131,7 +131,7 @@ func run(log *slog.Logger, configPath, dbPath string) error {
 			}
 
 			if event.Type == models.InputScan {
-				if err := handleScan(ctx, log, event, mediaResolver, ruleEngine, ctrl, eventRepo, cfg); err != nil {
+				if err := handleScan(ctx, log, event, mediaResolver, ruleEngine, ctrl, mpv, eventRepo, cfg); err != nil {
 					log.Error("scan handling failed", "tag_id", event.Value, "error", err)
 				}
 			}
@@ -146,6 +146,7 @@ func handleScan(
 	mediaResolver *resolver.ConfigResolver,
 	ruleEngine *rules.RuleEngine,
 	ctrl *player.Controller,
+	mpv *player.MPVPlayer,
 	eventRepo *logger.SQLiteRepository,
 	cfg *models.Config,
 ) error {
@@ -168,7 +169,7 @@ func handleScan(
 	}
 
 	if mediaResolver.IsSeries(tagID) {
-		return handleSeriesScan(ctx, log, tagID, mediaResolver, ctrl, eventRepo, cfg)
+		return handleSeriesScan(ctx, log, tagID, mediaResolver, ctrl, mpv, eventRepo, cfg)
 	}
 	return handleSingleScan(ctx, log, tagID, mediaResolver, ctrl, eventRepo, cfg)
 }
@@ -203,16 +204,16 @@ func handleSingleScan(
 
 // handleSeriesScan handles the full series playback flow:
 // 1. Look up progress to determine current episode
-// 2. If episode in-progress, prompt resume/restart via buttons
+// 2. If episode in-progress, show OSD prompt and wait for resume/restart
 // 3. Play the episode
 // 4. On episode end, auto-advance to next episode
-// 5. Support next/prev episode buttons during playback
 func handleSeriesScan(
 	ctx context.Context,
 	log *slog.Logger,
 	tagID string,
 	mediaResolver *resolver.ConfigResolver,
 	ctrl *player.Controller,
+	mpv *player.MPVPlayer,
 	eventRepo *logger.SQLiteRepository,
 	cfg *models.Config,
 ) error {
@@ -262,7 +263,7 @@ func handleSeriesScan(
 			"position", progress.PositionSeconds,
 		)
 
-		choice, err := promptResumeOrRestart(ctx, log, ctrl, tagID, cfg)
+		choice, err := promptResumeOrRestart(ctx, log, ctrl, mpv, item, cfg)
 		if err != nil {
 			return err
 		}
@@ -277,23 +278,38 @@ func handleSeriesScan(
 	return playSeriesLoop(ctx, log, tagID, item, resumePosition, mediaResolver, ctrl, eventRepo, cfg)
 }
 
-// promptResumeOrRestart enters the prompt state and waits for the user to
-// press Play/Pause (resume) or Stop (restart).
+// promptResumeOrRestart shows the episode paused with an OSD message and waits
+// for the user to press Play/Pause (resume) or Stop (restart).
 func promptResumeOrRestart(
 	ctx context.Context,
 	log *slog.Logger,
 	ctrl *player.Controller,
-	tagID string,
+	mpv *player.MPVPlayer,
+	item *models.MediaItem,
 	cfg *models.Config,
 ) (player.EpisodeAction, error) {
-	promptCh := ctrl.EnterPromptState(tagID)
+	// Start the episode paused so the user sees the first frame on screen.
+	if err := mpv.PlayPaused(item.Path); err != nil {
+		return player.EpisodeNone, fmt.Errorf("starting paused playback for prompt: %w", err)
+	}
+
+	// Show OSD prompt on screen.
+	promptText := fmt.Sprintf("%s\n\nPress PLAY to resume\nPress STOP to restart", item.Title)
+	if err := mpv.ShowMessage(promptText, 0); err != nil {
+		log.Warn("failed to show OSD prompt", "error", err)
+	}
+
+	promptCh := ctrl.EnterPromptState(item.TagID)
 	buttonCh := startButtonHandler(ctx, log, cfg)
 
 	for {
 		select {
 		case <-ctx.Done():
+			mpv.Stop()
 			return player.EpisodeNone, ctx.Err()
 		case choice := <-promptCh:
+			// Stop the paused preview before real playback starts.
+			mpv.Stop()
 			return choice, nil
 		case btnEvent, ok := <-buttonCh:
 			if !ok {
@@ -304,14 +320,15 @@ func promptResumeOrRestart(
 				log.Error("prompt input error", "error", err)
 			}
 			if action == player.EpisodeResume || action == player.EpisodeRestart {
+				// Stop the paused preview before real playback starts.
+				mpv.Stop()
 				return action, nil
 			}
 		}
 	}
 }
 
-// playSeriesLoop plays episodes sequentially, supporting auto-advance and
-// next/prev episode navigation via buttons.
+// playSeriesLoop plays episodes sequentially with auto-advance.
 func playSeriesLoop(
 	ctx context.Context,
 	log *slog.Logger,
@@ -353,140 +370,55 @@ func playSeriesLoop(
 		position = 0
 
 		buttonCh := startButtonHandler(ctx, log, cfg)
-		action := seriesPlaybackLoop(ctx, log, ctrl, buttonCh)
+		playbackLoop(ctx, log, ctrl, buttonCh)
 
 		// Save position when stopping mid-episode.
 		duration := time.Since(startTime)
 		logPlaybackEvent(log, eventRepo, tagID, item, startTime)
 
-		switch action {
-		case player.EpisodeNext:
-			next, err := mediaResolver.NextEpisode(tagID, item.Season, item.Episode)
-			if err != nil {
-				log.Error("failed to resolve next episode", "error", err)
-				ctrl.Reset()
-				return nil
-			}
-			if next == nil {
-				log.Info("already at last episode")
-				ctrl.Reset()
-				return nil
-			}
-			// Mark current as completed and advance.
+		if ctrl.State() == models.PlayerStopped {
+			// User pressed stop - save position and exit.
 			eventRepo.SaveProgress(&models.SeriesProgress{
-				TagID: tagID, CurrentSeason: next.Season, CurrentEpisode: next.Episode,
-				PositionSeconds: 0, Completed: false,
+				TagID: tagID, CurrentSeason: item.Season, CurrentEpisode: item.Episode,
+				PositionSeconds: int(duration.Seconds()), Completed: false,
 			})
-			item = next
-			log.Info("skipping to next episode", "title", item.Title)
-			continue
-
-		case player.EpisodePrev:
-			prev, err := mediaResolver.PrevEpisode(tagID, item.Season, item.Episode)
-			if err != nil {
-				log.Error("failed to resolve previous episode", "error", err)
-				ctrl.Reset()
-				return nil
-			}
-			if prev == nil {
-				log.Info("already at first episode")
-				ctrl.Reset()
-				return nil
-			}
-			eventRepo.SaveProgress(&models.SeriesProgress{
-				TagID: tagID, CurrentSeason: prev.Season, CurrentEpisode: prev.Episode,
-				PositionSeconds: 0, Completed: false,
-			})
-			item = prev
-			log.Info("skipping to previous episode", "title", item.Title)
-			continue
-
-		case player.EpisodeNone:
-			// Natural end or stop button.
-			if ctrl.State() == models.PlayerStopped {
-				// User pressed stop - save position and exit.
-				eventRepo.SaveProgress(&models.SeriesProgress{
-					TagID: tagID, CurrentSeason: item.Season, CurrentEpisode: item.Episode,
-					PositionSeconds: int(duration.Seconds()), Completed: false,
-				})
-				ctrl.Reset()
-				return nil
-			}
-
-			// Episode finished naturally - mark as completed, try next episode.
-			next, err := mediaResolver.NextEpisode(tagID, item.Season, item.Episode)
-			if err != nil {
-				log.Error("failed to resolve next episode", "error", err)
-				eventRepo.SaveProgress(&models.SeriesProgress{
-					TagID: tagID, CurrentSeason: item.Season, CurrentEpisode: item.Episode,
-					Completed: true,
-				})
-				ctrl.Reset()
-				return nil
-			}
-			if next == nil {
-				// Series finished.
-				log.Info("series completed", "tag", tagID)
-				eventRepo.SaveProgress(&models.SeriesProgress{
-					TagID: tagID, CurrentSeason: item.Season, CurrentEpisode: item.Episode,
-					Completed: true,
-				})
-				ctrl.Reset()
-				return nil
-			}
-
-			// Auto-advance to next episode.
-			eventRepo.SaveProgress(&models.SeriesProgress{
-				TagID: tagID, CurrentSeason: next.Season, CurrentEpisode: next.Episode,
-				PositionSeconds: 0, Completed: false,
-			})
-			item = next
-			log.Info("auto-advancing to next episode", "title", item.Title)
-			continue
+			ctrl.Reset()
+			return nil
 		}
+
+		// Episode finished naturally - mark as completed, try next episode.
+		next, err := mediaResolver.NextEpisode(tagID, item.Season, item.Episode)
+		if err != nil {
+			log.Error("failed to resolve next episode", "error", err)
+			eventRepo.SaveProgress(&models.SeriesProgress{
+				TagID: tagID, CurrentSeason: item.Season, CurrentEpisode: item.Episode,
+				Completed: true,
+			})
+			ctrl.Reset()
+			return nil
+		}
+		if next == nil {
+			// Series finished.
+			log.Info("series completed", "tag", tagID)
+			eventRepo.SaveProgress(&models.SeriesProgress{
+				TagID: tagID, CurrentSeason: item.Season, CurrentEpisode: item.Episode,
+				Completed: true,
+			})
+			ctrl.Reset()
+			return nil
+		}
+
+		// Auto-advance to next episode.
+		eventRepo.SaveProgress(&models.SeriesProgress{
+			TagID: tagID, CurrentSeason: next.Season, CurrentEpisode: next.Episode,
+			PositionSeconds: 0, Completed: false,
+		})
+		item = next
+		log.Info("auto-advancing to next episode", "title", item.Title)
 	}
 }
 
-// seriesPlaybackLoop runs the button event loop during series playback.
-// Returns an EpisodeAction indicating what happened (none, next, prev).
-func seriesPlaybackLoop(
-	ctx context.Context,
-	log *slog.Logger,
-	ctrl *player.Controller,
-	buttonCh <-chan models.InputEvent,
-) player.EpisodeAction {
-	doneCh := make(chan struct{})
-	go func() {
-		ctrl.WaitForEnd()
-		close(doneCh)
-	}()
-
-	for {
-		select {
-		case <-ctx.Done():
-			ctrl.HandleInput(models.InputEvent{Type: models.InputStop})
-			return player.EpisodeNone
-		case <-doneCh:
-			return player.EpisodeNone
-		case btnEvent, ok := <-buttonCh:
-			if !ok {
-				continue
-			}
-			action, err := ctrl.HandleInput(btnEvent)
-			if err != nil {
-				log.Error("button handling failed", "event", btnEvent.Type.String(), "error", err)
-			}
-			if action == player.EpisodeNext || action == player.EpisodePrev {
-				return action
-			}
-			if btnEvent.Type == models.InputStop {
-				return player.EpisodeNone
-			}
-		}
-	}
-}
-
-// playbackLoop runs the button event loop for non-series playback.
+// playbackLoop runs the button event loop during playback.
 func playbackLoop(
 	ctx context.Context,
 	log *slog.Logger,
@@ -544,20 +476,10 @@ func logPlaybackEvent(
 
 func startButtonHandler(ctx context.Context, log *slog.Logger, cfg *models.Config) <-chan models.InputEvent {
 	pinMap := map[models.InputEventType]int{
-		models.InputPlayPause:  cfg.Hardware.Buttons.PlayPause,
-		models.InputStop:       cfg.Hardware.Buttons.Stop,
-		models.InputRewind:     cfg.Hardware.Buttons.Rewind,
-		models.InputForward:    cfg.Hardware.Buttons.Forward,
-		models.InputVolumeUp:   cfg.Hardware.Buttons.VolumeUp,
-		models.InputVolumeDown: cfg.Hardware.Buttons.VolumeDown,
-	}
-
-	// Add episode navigation buttons if configured.
-	if cfg.Hardware.Buttons.NextEpisode > 0 {
-		pinMap[models.InputNextEpisode] = cfg.Hardware.Buttons.NextEpisode
-	}
-	if cfg.Hardware.Buttons.PrevEpisode > 0 {
-		pinMap[models.InputPrevEpisode] = cfg.Hardware.Buttons.PrevEpisode
+		models.InputPlayPause: cfg.Hardware.Buttons.PlayPause,
+		models.InputStop:      cfg.Hardware.Buttons.Stop,
+		models.InputRewind:    cfg.Hardware.Buttons.Rewind,
+		models.InputForward:   cfg.Hardware.Buttons.Forward,
 	}
 
 	gpio := &noopGPIO{}

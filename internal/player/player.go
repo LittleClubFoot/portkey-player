@@ -11,4 +11,7 @@ type Player interface {
 	IsPlaying() bool
 	GetPosition() (float64, error)
 	WaitForEnd() error
+	// ShowMessage displays an OSD text overlay on screen.
+	// durationMs of 0 means the message persists until cleared or playback changes.
+	ShowMessage(text string, durationMs int) error
 }

@@ -13,11 +13,9 @@ import (
 type EpisodeAction int
 
 const (
-	EpisodeNone       EpisodeAction = iota
-	EpisodeNext                     // advance to next episode
-	EpisodePrev                     // go to previous episode
-	EpisodeRestart                  // restart current episode from beginning
-	EpisodeResume                   // resume current episode from saved position
+	EpisodeNone    EpisodeAction = iota
+	EpisodeRestart               // restart current episode from beginning
+	EpisodeResume                // resume current episode from saved position
 )
 
 // Controller orchestrates playback in response to input events.
@@ -26,12 +24,11 @@ type Controller struct {
 	state   models.PlayerState
 	current *models.MediaItem
 	started time.Time
-	volume  int
 	mu      sync.Mutex
 	logger  *slog.Logger
 
 	// Series playback fields.
-	seriesTag    string        // tag ID if currently playing a series
+	seriesTag    string             // tag ID if currently playing a series
 	promptResult chan EpisodeAction // used during resume/restart prompt
 }
 
@@ -40,7 +37,6 @@ func NewController(player Player, logger *slog.Logger) *Controller {
 	return &Controller{
 		player: player,
 		state:  models.PlayerIdle,
-		volume: 100,
 		logger: logger,
 	}
 }
@@ -112,7 +108,7 @@ func (c *Controller) SeriesTag() string {
 }
 
 // HandleInput processes a button input event during playback.
-// Returns an EpisodeAction if episode navigation was requested.
+// Returns an EpisodeAction if a prompt choice was made.
 func (c *Controller) HandleInput(event models.InputEvent) (EpisodeAction, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -131,22 +127,6 @@ func (c *Controller) HandleInput(event models.InputEvent) (EpisodeAction, error)
 		return EpisodeNone, c.player.Seek(-10)
 	case models.InputForward:
 		return EpisodeNone, c.player.Seek(10)
-	case models.InputVolumeUp:
-		return EpisodeNone, c.adjustVolume(5)
-	case models.InputVolumeDown:
-		return EpisodeNone, c.adjustVolume(-5)
-	case models.InputNextEpisode:
-		if c.seriesTag != "" {
-			c.logger.Info("next episode requested")
-			return EpisodeNext, c.stop()
-		}
-		return EpisodeNone, nil
-	case models.InputPrevEpisode:
-		if c.seriesTag != "" {
-			c.logger.Info("previous episode requested")
-			return EpisodePrev, c.stop()
-		}
-		return EpisodeNone, nil
 	default:
 		return EpisodeNone, nil
 	}
@@ -205,17 +185,6 @@ func (c *Controller) stop() error {
 	c.state = models.PlayerStopped
 	c.logger.Info("playback stopped")
 	return nil
-}
-
-func (c *Controller) adjustVolume(delta int) error {
-	c.volume += delta
-	if c.volume < 0 {
-		c.volume = 0
-	}
-	if c.volume > 150 {
-		c.volume = 150
-	}
-	return c.player.SetVolume(c.volume)
 }
 
 // WaitForEnd blocks until the current media finishes or is stopped.

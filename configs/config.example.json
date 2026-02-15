@@ -80,11 +80,7 @@
       "play_pause": 17,
       "stop": 27,
       "rewind": 22,
-      "forward": 23,
-      "volume_up": 24,
-      "volume_down": 25,
-      "next_episode": 5,
-      "prev_episode": 6
+      "forward": 23
     },
     "player": "mpv",
     "player_args": ["--fullscreen", "--no-osd-bar", "--really-quiet"]

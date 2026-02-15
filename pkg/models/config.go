@@ -70,14 +70,9 @@ type HardwareConfig struct {
 }
 
 // ButtonPins maps button functions to GPIO pin numbers.
-// NextEpisode and PrevEpisode are optional and only used for series playback.
 type ButtonPins struct {
-	PlayPause   int `json:"play_pause"`
-	Stop        int `json:"stop"`
-	Rewind      int `json:"rewind"`
-	Forward     int `json:"forward"`
-	VolumeUp    int `json:"volume_up"`
-	VolumeDown  int `json:"volume_down"`
-	NextEpisode int `json:"next_episode,omitempty"`
-	PrevEpisode int `json:"prev_episode,omitempty"`
+	PlayPause int `json:"play_pause"`
+	Stop      int `json:"stop"`
+	Rewind    int `json:"rewind"`
+	Forward   int `json:"forward"`
 }

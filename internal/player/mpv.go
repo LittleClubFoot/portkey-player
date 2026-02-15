@@ -32,6 +32,15 @@ func NewMPVPlayer(extraArgs []string, logger *slog.Logger) *MPVPlayer {
 }
 
 func (m *MPVPlayer) Play(mediaPath string) error {
+	return m.playInternal(mediaPath, false)
+}
+
+// PlayPaused starts playback in a paused state (shows first frame).
+func (m *MPVPlayer) PlayPaused(mediaPath string) error {
+	return m.playInternal(mediaPath, true)
+}
+
+func (m *MPVPlayer) playInternal(mediaPath string, paused bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -47,6 +56,9 @@ func (m *MPVPlayer) Play(mediaPath string) error {
 		"--input-ipc-server=" + m.socketPath,
 		"--idle=no",
 	}
+	if paused {
+		args = append(args, "--pause")
+	}
 	args = append(args, m.args...)
 	args = append(args, mediaPath)
 
@@ -58,7 +70,7 @@ func (m *MPVPlayer) Play(mediaPath string) error {
 		return fmt.Errorf("starting mpv: %w", err)
 	}
 
-	m.logger.Info("mpv started", "pid", m.cmd.Process.Pid, "media", mediaPath)
+	m.logger.Info("mpv started", "pid", m.cmd.Process.Pid, "media", mediaPath, "paused", paused)
 
 	// Connect to the IPC socket.
 	m.ipc = NewIPCClient(m.socketPath)
@@ -67,7 +79,7 @@ func (m *MPVPlayer) Play(mediaPath string) error {
 		return fmt.Errorf("connecting to mpv IPC: %w", err)
 	}
 
-	m.playing = true
+	m.playing = !paused
 	return nil
 }
 
@@ -183,6 +195,21 @@ func (m *MPVPlayer) GetPosition() (float64, error) {
 	default:
 		return 0, fmt.Errorf("unexpected position type: %T", resp.Data)
 	}
+}
+
+func (m *MPVPlayer) ShowMessage(text string, durationMs int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.ipc == nil {
+		return fmt.Errorf("player not running")
+	}
+
+	_, err := m.ipc.SendCommand("show-text", text, durationMs)
+	if err != nil {
+		return fmt.Errorf("showing OSD message: %w", err)
+	}
+	return nil
 }
 
 // WaitForEnd blocks until the mpv process exits.
