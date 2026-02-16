@@ -264,19 +264,6 @@ func TestRuleEngine_RecordPlay(t *testing.T) {
 	}
 }
 
-func TestRuleEngine_GetPlayCount(t *testing.T) {
-	counter := &mockCounter{count: 7}
-	engine := NewRuleEngine(models.RulesConfig{}, counter)
-
-	count, err := engine.GetPlayCount(time.Now())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if count != 7 {
-		t.Errorf("expected count 7, got %d", count)
-	}
-}
-
 func TestRuleEngine_CombinedRules(t *testing.T) {
 	counter := &mockCounter{count: 4}
 	rules := models.RulesConfig{

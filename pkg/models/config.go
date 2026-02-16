@@ -18,8 +18,6 @@ type MediaEntry struct {
 	Duration  int               `json:"duration,omitempty"` // minutes
 	Type      string            `json:"type"`               // "movie", "episode", "music", "audiobook", "series"
 	AgeRating string            `json:"age_rating,omitempty"`
-	Season    int               `json:"season,omitempty"`
-	Episode   int               `json:"episode,omitempty"`
 	Episodes  []EpisodeEntry    `json:"episodes,omitempty"`
 	Metadata  map[string]any    `json:"metadata,omitempty"`
 }
