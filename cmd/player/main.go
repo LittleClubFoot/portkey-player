@@ -155,8 +155,18 @@ func run(log *slog.Logger, configPath, dbPath string) error {
 				// Hide idle screen before playback.
 				mpv.HideIdleScreen()
 
-				if err := handleScan(ctx, log, event, mediaResolver, ruleEngine, ctrl, mpv, eventRepo, cfg); err != nil {
-					log.Error("scan handling failed", "tag_id", event.Value, "error", err)
+				// Process scans in a loop: if playback is interrupted by a new
+				// scan, immediately process the new scan without returning to idle.
+				for {
+					nextScan, err := handleScan(ctx, log, event, scanCh, mediaResolver, ruleEngine, ctrl, mpv, eventRepo, cfg)
+					if err != nil {
+						log.Error("scan handling failed", "tag_id", event.Value, "error", err)
+					}
+					if nextScan == nil {
+						break
+					}
+					log.Info("playback interrupted by new scan", "new_tag", nextScan.Value)
+					event = *nextScan
 				}
 
 				// Re-show idle screen after playback ends.
@@ -174,24 +184,25 @@ func handleScan(
 	ctx context.Context,
 	log *slog.Logger,
 	event models.InputEvent,
+	scanCh <-chan models.InputEvent,
 	mediaResolver *resolver.ConfigResolver,
 	ruleEngine *rules.RuleEngine,
 	ctrl *player.Controller,
 	mpv *player.MPVPlayer,
 	eventRepo *logger.SQLiteRepository,
 	cfg *models.Config,
-) error {
+) (*models.InputEvent, error) {
 	tagID := event.Value
 	log.Info("processing scan", "tag_id", tagID)
 
 	// Check parental control rules.
 	allowed, reason, err := ruleEngine.CanPlay(tagID, time.Now())
 	if err != nil {
-		return fmt.Errorf("checking rules for tag %s: %w", tagID, err)
+		return nil, fmt.Errorf("checking rules for tag %s: %w", tagID, err)
 	}
 	if !allowed {
 		log.Warn("playback denied", "tag_id", tagID, "reason", reason)
-		return nil
+		return nil, nil
 	}
 
 	// Record the play for daily limit tracking.
@@ -200,9 +211,9 @@ func handleScan(
 	}
 
 	if mediaResolver.IsSeries(tagID) {
-		return handleSeriesScan(ctx, log, tagID, mediaResolver, ctrl, mpv, eventRepo, cfg)
+		return handleSeriesScan(ctx, log, tagID, scanCh, mediaResolver, ctrl, mpv, eventRepo, cfg)
 	}
-	return handleSingleScan(ctx, log, tagID, mediaResolver, ctrl, eventRepo, cfg)
+	return handleSingleScan(ctx, log, tagID, scanCh, mediaResolver, ctrl, eventRepo, cfg)
 }
 
 // handleSingleScan handles playback for non-series media (movies, music, etc.).
@@ -210,48 +221,54 @@ func handleSingleScan(
 	ctx context.Context,
 	log *slog.Logger,
 	tagID string,
+	scanCh <-chan models.InputEvent,
 	mediaResolver *resolver.ConfigResolver,
 	ctrl *player.Controller,
 	eventRepo *logger.SQLiteRepository,
 	cfg *models.Config,
-) error {
+) (*models.InputEvent, error) {
 	item, err := mediaResolver.Resolve(tagID)
 	if err != nil {
-		return fmt.Errorf("resolving tag %s: %w", tagID, err)
+		return nil, fmt.Errorf("resolving tag %s: %w", tagID, err)
 	}
 
 	startTime := time.Now()
 	if err := ctrl.StartPlayback(item); err != nil {
-		return fmt.Errorf("starting playback: %w", err)
+		return nil, fmt.Errorf("starting playback: %w", err)
 	}
 
 	buttonCh := startButtonHandler(ctx, log, cfg)
-	playbackLoop(ctx, log, ctrl, buttonCh)
+	nextScan := playbackLoop(ctx, log, ctrl, buttonCh, scanCh)
 
 	logPlaybackEvent(log, eventRepo, tagID, item, startTime)
 	ctrl.Reset()
-	return nil
+	return nextScan, nil
 }
 
 // handleSeriesScan handles the full series playback flow:
 // 1. Look up progress to determine current episode
-// 2. If episode in-progress, show OSD prompt and wait for resume/restart
+// 2. If episode in-progress, auto-resume from saved position
 // 3. Play the episode
 // 4. On episode end, auto-advance to next episode
+//
+// Note: In scanner-only mode (no physical buttons), the resume/restart prompt
+// is skipped and episodes auto-resume. The promptResumeOrRestart function is
+// retained for Phase 2 when arcade buttons are connected.
 func handleSeriesScan(
 	ctx context.Context,
 	log *slog.Logger,
 	tagID string,
+	scanCh <-chan models.InputEvent,
 	mediaResolver *resolver.ConfigResolver,
 	ctrl *player.Controller,
 	mpv *player.MPVPlayer,
 	eventRepo *logger.SQLiteRepository,
 	cfg *models.Config,
-) error {
+) (*models.InputEvent, error) {
 	// Look up saved progress for this series.
 	progress, err := eventRepo.GetProgress(tagID)
 	if err != nil {
-		return fmt.Errorf("getting series progress: %w", err)
+		return nil, fmt.Errorf("getting series progress: %w", err)
 	}
 
 	// Determine which episode to play.
@@ -262,20 +279,20 @@ func handleSeriesScan(
 		// No progress - start from the first episode.
 		item, err = mediaResolver.FirstEpisode(tagID)
 		if err != nil {
-			return fmt.Errorf("resolving first episode: %w", err)
+			return nil, fmt.Errorf("resolving first episode: %w", err)
 		}
 		log.Info("starting series from beginning", "title", item.Title)
 	} else if progress.Completed {
 		// Last episode was completed - advance to next.
 		next, err := mediaResolver.NextEpisode(tagID, progress.CurrentSeason, progress.CurrentEpisode)
 		if err != nil {
-			return fmt.Errorf("resolving next episode: %w", err)
+			return nil, fmt.Errorf("resolving next episode: %w", err)
 		}
 		if next == nil {
 			// Finished the series; loop back to the first episode.
 			item, err = mediaResolver.FirstEpisode(tagID)
 			if err != nil {
-				return fmt.Errorf("resolving first episode for restart: %w", err)
+				return nil, fmt.Errorf("resolving first episode for restart: %w", err)
 			}
 			log.Info("series completed, restarting from beginning", "title", item.Title)
 		} else {
@@ -283,34 +300,26 @@ func handleSeriesScan(
 			log.Info("advancing to next episode", "title", item.Title)
 		}
 	} else {
-		// Episode is in-progress - prompt user to resume or restart.
+		// Episode is in-progress - auto-resume from saved position.
 		item, err = mediaResolver.ResolveEpisode(tagID, progress.CurrentSeason, progress.CurrentEpisode)
 		if err != nil {
-			return fmt.Errorf("resolving current episode: %w", err)
+			return nil, fmt.Errorf("resolving current episode: %w", err)
 		}
-
-		log.Info("episode in-progress, prompting user",
+		resumePosition = progress.PositionSeconds
+		log.Info("auto-resuming episode",
 			"title", item.Title,
-			"position", progress.PositionSeconds,
+			"position", resumePosition,
 		)
-
-		choice, err := promptResumeOrRestart(ctx, log, ctrl, mpv, item, cfg)
-		if err != nil {
-			return err
-		}
-
-		if choice == player.EpisodeResume {
-			resumePosition = progress.PositionSeconds
-		}
-		// EpisodeRestart: resumePosition stays 0
 	}
 
 	// Play episodes in a loop (for auto-advance).
-	return playSeriesLoop(ctx, log, tagID, item, resumePosition, mediaResolver, ctrl, eventRepo, cfg)
+	return playSeriesLoop(ctx, log, tagID, item, resumePosition, scanCh, mediaResolver, ctrl, eventRepo, cfg)
 }
 
 // promptResumeOrRestart shows the episode paused with an OSD message and waits
 // for the user to press Play/Pause (resume) or Stop (restart).
+// This is unused in scanner-only mode (MVP) and will be re-enabled in Phase 2
+// when physical arcade buttons are connected.
 func promptResumeOrRestart(
 	ctx context.Context,
 	log *slog.Logger,
@@ -366,11 +375,12 @@ func playSeriesLoop(
 	tagID string,
 	startItem *models.MediaItem,
 	resumePosition int,
+	scanCh <-chan models.InputEvent,
 	mediaResolver *resolver.ConfigResolver,
 	ctrl *player.Controller,
 	eventRepo *logger.SQLiteRepository,
 	cfg *models.Config,
-) error {
+) (*models.InputEvent, error) {
 	item := startItem
 	position := resumePosition
 
@@ -394,27 +404,27 @@ func playSeriesLoop(
 			err = ctrl.StartPlayback(item)
 		}
 		if err != nil {
-			return fmt.Errorf("starting playback of %q: %w", item.Title, err)
+			return nil, fmt.Errorf("starting playback of %q: %w", item.Title, err)
 		}
 
 		// Reset position for subsequent episodes.
 		position = 0
 
 		buttonCh := startButtonHandler(ctx, log, cfg)
-		playbackLoop(ctx, log, ctrl, buttonCh)
+		nextScan := playbackLoop(ctx, log, ctrl, buttonCh, scanCh)
 
 		// Save position when stopping mid-episode.
 		duration := time.Since(startTime)
 		logPlaybackEvent(log, eventRepo, tagID, item, startTime)
 
-		if ctrl.State() == models.PlayerStopped {
-			// User pressed stop - save position and exit.
+		if nextScan != nil || ctrl.State() == models.PlayerStopped {
+			// Playback interrupted by new scan or user pressed stop.
 			eventRepo.SaveProgress(&models.SeriesProgress{
 				TagID: tagID, CurrentSeason: item.Season, CurrentEpisode: item.Episode,
 				PositionSeconds: int(duration.Seconds()), Completed: false,
 			})
 			ctrl.Reset()
-			return nil
+			return nextScan, nil
 		}
 
 		// Episode finished naturally - mark as completed, try next episode.
@@ -426,7 +436,7 @@ func playSeriesLoop(
 				Completed: true,
 			})
 			ctrl.Reset()
-			return nil
+			return nil, nil
 		}
 		if next == nil {
 			// Series finished.
@@ -436,7 +446,7 @@ func playSeriesLoop(
 				Completed: true,
 			})
 			ctrl.Reset()
-			return nil
+			return nil, nil
 		}
 
 		// Auto-advance to next episode.
@@ -449,13 +459,16 @@ func playSeriesLoop(
 	}
 }
 
-// playbackLoop runs the button event loop during playback.
+// playbackLoop runs the event loop during playback, listening for button
+// presses, scan events, natural playback end, and context cancellation.
+// Returns non-nil if playback was interrupted by a new scan.
 func playbackLoop(
 	ctx context.Context,
 	log *slog.Logger,
 	ctrl *player.Controller,
 	buttonCh <-chan models.InputEvent,
-) {
+	scanCh <-chan models.InputEvent,
+) *models.InputEvent {
 	doneCh := make(chan struct{})
 	go func() {
 		ctrl.WaitForEnd()
@@ -466,9 +479,9 @@ func playbackLoop(
 		select {
 		case <-ctx.Done():
 			ctrl.HandleInput(models.InputEvent{Type: models.InputStop})
-			return
+			return nil
 		case <-doneCh:
-			return
+			return nil
 		case btnEvent, ok := <-buttonCh:
 			if !ok {
 				continue
@@ -477,8 +490,15 @@ func playbackLoop(
 				log.Error("button handling failed", "event", btnEvent.Type.String(), "error", err)
 			}
 			if btnEvent.Type == models.InputStop {
-				return
+				return nil
 			}
+		case scanEvent, ok := <-scanCh:
+			if !ok {
+				continue
+			}
+			log.Info("scan received during playback, stopping current", "new_tag", scanEvent.Value)
+			ctrl.HandleInput(models.InputEvent{Type: models.InputStop})
+			return &scanEvent
 		}
 	}
 }
@@ -526,7 +546,8 @@ func startButtonHandler(ctx context.Context, log *slog.Logger, cfg *models.Confi
 	return ch
 }
 
-// noopGPIO is a no-op GPIO provider for development/testing.
+// noopGPIO is a no-op GPIO provider used when physical buttons are not connected.
+// Phase 2 will replace this with a real GPIO implementation for arcade buttons.
 type noopGPIO struct{}
 
 func (n *noopGPIO) ReadPin(pin int) bool { return false }
