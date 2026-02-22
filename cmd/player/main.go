@@ -238,7 +238,7 @@ func handleSingleScan(
 	}
 
 	buttonCh := startButtonHandler(ctx, log, cfg)
-	nextScan := playbackLoop(ctx, log, ctrl, buttonCh, scanCh)
+	nextScan := playbackLoop(ctx, log, ctrl, buttonCh, scanCh, tagID)
 
 	logPlaybackEvent(log, eventRepo, tagID, item, startTime)
 	ctrl.Reset()
@@ -411,7 +411,7 @@ func playSeriesLoop(
 		position = 0
 
 		buttonCh := startButtonHandler(ctx, log, cfg)
-		nextScan := playbackLoop(ctx, log, ctrl, buttonCh, scanCh)
+		nextScan := playbackLoop(ctx, log, ctrl, buttonCh, scanCh, tagID)
 
 		// Save position when stopping mid-episode.
 		duration := time.Since(startTime)
@@ -461,13 +461,15 @@ func playSeriesLoop(
 
 // playbackLoop runs the event loop during playback, listening for button
 // presses, scan events, natural playback end, and context cancellation.
-// Returns non-nil if playback was interrupted by a new scan.
+// Returns non-nil if playback was interrupted by a new (different) scan.
+// Rescanning the same tag toggles pause/resume.
 func playbackLoop(
 	ctx context.Context,
 	log *slog.Logger,
 	ctrl *player.Controller,
 	buttonCh <-chan models.InputEvent,
 	scanCh <-chan models.InputEvent,
+	currentTagID string,
 ) *models.InputEvent {
 	doneCh := make(chan struct{})
 	go func() {
@@ -494,6 +496,14 @@ func playbackLoop(
 			}
 		case scanEvent, ok := <-scanCh:
 			if !ok {
+				continue
+			}
+			if scanEvent.Value == currentTagID {
+				// Same tag rescanned: toggle pause/resume.
+				log.Info("same tag rescanned, toggling pause", "tag_id", scanEvent.Value)
+				if _, err := ctrl.HandleInput(models.InputEvent{Type: models.InputPlayPause}); err != nil {
+					log.Error("toggle pause failed", "error", err)
+				}
 				continue
 			}
 			log.Info("scan received during playback, stopping current", "new_tag", scanEvent.Value)
